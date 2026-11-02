@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#3b2313" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="UNO 1-9" />
+  <link rel="manifest" href="manifest.json" />
+  <title>UNO Grid 1-9 • Sfida a Distanza Mobile</title>
+  <link rel="stylesheet" href="styles.css" />
+  <!-- PeerJS per multiplayer P2P a distanza tramite codice stanza -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" defer></script>
+</head>
+<body>
+  <!-- Barra Superiore -->
+  <header class="top-bar">
+    <div class="brand">
+      <div class="brand-logo">UNO</div>
+      <span class="brand-title">Tabella 1–9</span>
+    </div>
+
+    <div class="top-controls">
+      <div id="room-pill" class="room-pill" style="display: none;" title="Tocca per condividere il link di invito">
+        <span id="conn-dot" class="status-dot"></span>
+        <span id="room-code-header">-----</span>
+        <span>📲</span>
+      </div>
+      <button id="btn-sound" class="icon-btn" title="Attiva/Disattiva audio">🔊</button>
+      <button id="btn-rules" class="icon-btn" title="Regole">📖</button>
+      <button id="btn-leave" class="icon-btn" style="display: none;" title="Esci dalla partita">🚪</button>
+    </div>
+  </header>
+
+  <!-- SCHERMATA LOBBY -->
+  <main id="lobby-screen" class="screen active">
+    <div class="lobby-card">
+      <div class="lobby-hero">
+        <span class="lobby-badge">📱 Ottimizzato per Mobile</span>
+        <h1>UNO Tabella 1–9</h1>
+        <p>Sfida un amico a distanza dal telefono! Completa i numeri da 1 a 9 pescando dal mazzo UNO.</p>
+      </div>
+
+      <div class="input-group">
+        <label for="player-name-input">Il tuo nome</label>
+        <input
+          id="player-name-input"
+          type="text"
+          class="text-input"
+          placeholder="Es. Marco"
+          maxlength="16"
+          value="Giocatore 1"
+          autocomplete="off"
+        />
+      </div>
+
+      <!-- Azioni Stanza Online -->
+      <div class="lobby-tabs">
+        <button id="btn-create-room" class="btn-primary">
+          ✨ Crea Stanza Online
+        </button>
+        <button id="btn-local-mode" class="btn-secondary" title="Gioca in 2 sullo stesso smartphone">
+          👥 Stesso Telefono
+        </button>
+      </div>
+
+      <!-- Box Stanza Creata (in attesa dell'altro giocatore) -->
+      <div id="waiting-room-box" class="waiting-room-box">
+        <div style="font-size: 0.85rem; color: #bbf7d0; font-weight: 600;">
+          Invia il codice o il link al secondo giocatore:
+        </div>
+        <div id="created-room-code" class="room-code-big">-----</div>
+
+        <div class="share-actions">
+          <button id="btn-native-share" class="btn-primary share-main-btn">
+            📲 Invia Invito (WhatsApp / Condividi)
+          </button>
+          <div style="display: flex; gap: 8px; width: 100%; justify-content: center;">
+            <button id="btn-copy-code" class="icon-btn" style="flex: 1; justify-content: center;">📋 Copia Codice</button>
+            <button id="btn-copy-link" class="icon-btn" style="flex: 1; justify-content: center;">🔗 Copia Link</button>
+          </div>
+        </div>
+
+        <!-- QR Code per inquadrare subito da smartphone -->
+        <div id="qr-container" class="qr-box" style="display: none;">
+          <img id="qr-image" alt="QR Code Stanza" width="130" height="130" />
+          <span id="qr-caption">Inquadra con la fotocamera del telefono</span>
+        </div>
+
+        <div id="waiting-status-text" style="font-size: 0.82rem; color: rgba(255,255,255,0.78); margin-top: 8px;">
+          ⏳ In attesa che il secondo giocatore entri...
+        </div>
+      </div>
+
+      <div class="divider">oppure entra con codice</div>
+
+      <!-- Box Entra con Codice -->
+      <div class="join-box">
+        <div class="join-row">
+          <input
+            id="join-code-input"
+            type="text"
+            class="text-input code-input"
+            placeholder="CODICE"
+            maxlength="8"
+            autocomplete="off"
+          />
+          <button id="btn-join-room" class="btn-primary" style="white-space: nowrap;">
+            🚀 Entra
+          </button>
+        </div>
+        <div id="lobby-error" style="color: #fca5a5; font-size: 0.84rem; margin-top: 8px; display: none;"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- SCHERMATA DI GIOCO (Layout Verticale 9:16 fedele al Reel su Mobile!) -->
+  <main id="game-screen" class="screen">
+    <!-- HUD Turno Compatto -->
+    <section id="turn-hud" class="turn-hud">
+      <div class="turn-status-main">
+        <span id="turn-badge" class="turn-indicator-badge">TUO TURNO</span>
+        <span id="turn-prompt" class="turn-prompt">Tocca il mazzo UNO per pescare!</span>
+      </div>
+      <span id="streak-pill" class="streak-pill">🔥 0</span>
+    </section>
+
+    <!-- DUE TABELLE 1-9 AFFIANCATE (Come nel video!) -->
+    <section class="boards-pair-container">
+      <!-- Tabella Giocatore 1 (Sinistra) -->
+      <div id="board-left" class="paper-sheet">
+        <div class="sheet-header">
+          <div class="sheet-player-name">
+            <span id="p1-name-label">Giocatore 1</span>
+            <span id="p1-you-tag" class="you-tag">TU</span>
+          </div>
+          <span id="p1-score-badge" class="sheet-score">0/9</span>
+        </div>
+        <div id="grid-p1" class="grid-3x3"></div>
+      </div>
+
+      <!-- Tabella Giocatore 2 (Destra) -->
+      <div id="board-right" class="paper-sheet">
+        <div class="sheet-header">
+          <div class="sheet-player-name">
+            <span id="p2-name-label">Giocatore 2</span>
+            <span id="p2-you-tag" class="you-tag" style="display: none;">TU</span>
+          </div>
+          <span id="p2-score-badge" class="sheet-score">0/9</span>
+        </div>
+        <div id="grid-p2" class="grid-3x3"></div>
+      </div>
+    </section>
+
+    <!-- ZONA MAZZO UNO IN BASSO AL CENTRO (Esattamente come nel Reel!) -->
+    <section class="center-deck-zone">
+      <div class="deck-and-drawn-row">
+        <!-- Mazzo da cui pescare -->
+        <div class="deck-stage">
+          <div id="uno-deck" class="uno-deck-pile" title="Tocca per pescare una carta UNO">
+            <div class="deck-layer"></div>
+            <div class="deck-layer"></div>
+            <div class="deck-layer">
+              <div class="uno-back-oval">
+                <span class="uno-back-text">UNO</span>
+              </div>
+            </div>
+          </div>
+          <span id="deck-count" class="deck-count-badge">72 carte</span>
+        </div>
+
+        <!-- Carta Pescata -->
+        <div class="drawn-card-slot">
+          <div id="drawn-card-container" class="drawn-card-wrapper" style="display: none;"></div>
+          <div id="action-feedback" class="action-feedback-pill">
+            Tocca il mazzo UNO per pescare
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Barra Inferiore Mobile-Friendly: Reazioni & Auto-posizionamento -->
+    <section class="bottom-bar">
+      <div class="reaction-strip">
+        <button class="emoji-btn" data-emoji="😱">😱</button>
+        <button class="emoji-btn" data-emoji="🔥">🔥</button>
+        <button class="emoji-btn" data-emoji="😮‍💨">😮‍💨</button>
+        <button class="emoji-btn" data-emoji="😂">😂</button>
+        <button class="emoji-btn" data-emoji="😭">😭</button>
+        <button class="emoji-btn" data-emoji="🍀">🍀</button>
+      </div>
+
+      <label class="auto-place-toggle">
+        <input type="checkbox" id="chk-auto-place" checked />
+        <span>Auto-posiziona</span>
+      </label>
+    </section>
+  </main>
+
+  <!-- MODALE VITTORIA -->
+  <div id="victory-modal" class="modal-backdrop">
+    <div class="modal-card">
+      <div style="font-size: 3.2rem; margin-bottom: 4px;">🏆</div>
+      <h2 id="victory-title">Hai Vinto!</h2>
+      <p id="victory-subtitle">Hai completato tutta la tabella da 1 a 9!</p>
+
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div id="stat-max-streak" class="stat-val">0</div>
+          <div class="stat-lbl">Serie Max di Fila</div>
+        </div>
+        <div class="stat-item">
+          <div id="stat-total-turns" class="stat-val">0</div>
+          <div class="stat-lbl">Carte Pescate</div>
+        </div>
+      </div>
+
+      <button id="btn-rematch" class="btn-primary" style="width: 100%;">🔄 Gioca Rivincita</button>
+    </div>
+  </div>
+
+  <!-- MODALE REGOLE -->
+  <div id="rules-modal" class="modal-backdrop">
+    <div class="modal-card">
+      <h2>📖 Regole del Gioco</h2>
+      <ul class="rules-list">
+        <li>Ogni giocatore ha una <strong>tabella da 1 a 9</strong>.</li>
+        <li>Al centro c'è il mazzo di <strong>UNO</strong> con le carte numeriche da 1 a 9.</li>
+        <li>Al tuo turno, <strong>tocca il mazzo UNO</strong> per pescare:
+          <ul>
+            <li>✅ <strong>Se il numero ti manca:</strong> la carta va sulla casella corrispondente e <strong>continui a pescare!</strong></li>
+            <li>❌ <strong>Se hai già quel numero:</strong> passi la mano all'altro giocatore.</li>
+          </ul>
+        </li>
+        <li>🏆 <strong>Obiettivo:</strong> Vince chi completa per primo tutta la tabella da 1 a 9!</li>
+      </ul>
+      <button id="btn-close-rules" class="btn-primary" style="width: 100%;">Perfetto!</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
