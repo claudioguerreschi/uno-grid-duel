@@ -1,5 +1,5 @@
 // ============================================================================
-// UNO TABELLA 1-9 DUEL - LOGICA DI GIOCO & MULTIPLAYER MOBILE/DESKTOP
+// UNO TABELLA 1-9 DUEL (v2.0) - LOGICA DI GIOCO & MULTIPLAYER MOBILE/DESKTOP
 // ============================================================================
 
 const COLORS = ['red', 'blue', 'green', 'yellow'];
@@ -14,13 +14,15 @@ class SoundFX {
   }
 
   init() {
-    if (!this.ctx) {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (AudioCtx) this.ctx = new AudioCtx();
-    }
-    if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume();
-    }
+    try {
+      if (!this.ctx) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) this.ctx = new AudioCtx();
+      }
+      if (this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume();
+      }
+    } catch (_) {}
   }
 
   vibrate(pattern) {
@@ -115,7 +117,7 @@ function createInitialGameState(p1Name = 'Giocatore 1', p2Name = 'Giocatore 2') 
     deck,
     discardPile: [],
     turn: 0,
-    phase: 'DRAWING', // 'DRAWING' | 'PLACING' | 'DUPLICATE_WAIT' | 'GAME_OVER'
+    phase: 'DRAWING',
     pendingCard: null,
     lastActionText: 'Tocca il mazzo UNO per pescare!',
     lastActionType: 'neutral',
@@ -192,12 +194,14 @@ function sendNetMessage(type, payload = {}) {
     } catch (_) {}
   }
 
-  // 2. Cloud Relay HTTPS (ntfy.sh) - funziona anche sotto 4G/5G e mentre cambi app per WhatsApp!
-  const topic = `${CLOUD_RELAY_PREFIX}${app.roomCode}`;
-  fetch(`https://ntfy.sh/${topic}`, {
-    method: 'POST',
-    body: JSON.stringify(msg)
-  }).catch(() => {});
+  // 2. Cloud Relay HTTPS (ntfy.sh)
+  try {
+    const topic = `${CLOUD_RELAY_PREFIX}${app.roomCode}`;
+    fetch(`https://ntfy.sh/${topic}`, {
+      method: 'POST',
+      body: JSON.stringify(msg)
+    }).catch(() => {});
+  } catch (_) {}
 
   // 3. BroadcastChannel (stesso browser)
   if (app.bc) {
@@ -206,7 +210,7 @@ function sendNetMessage(type, payload = {}) {
     } catch (_) {}
   }
 
-  // 4. Server Relay locale (se attivo)
+  // 4. Server Relay locale (se su localhost)
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     fetch('/api/message', {
       method: 'POST',
@@ -232,7 +236,6 @@ function handleIncomingNetMessage(msg) {
 
     if (!wasAlreadyConnected) {
       sfx.playerJoined();
-      // Azzera il tavolo di riscaldamento e inizia la vera sfida 0 a 0!
       clearTimers();
       app.state = createInitialGameState(p1Name, p2Name);
       app.state.lastActionText = `🎉 ${p2Name} è entrato! Tocca a ${p1Name} pescare!`;
@@ -289,17 +292,16 @@ function broadcastState() {
 }
 
 function setupAuxiliaryChannels(roomCode) {
-  // 1. BroadcastChannel locale
-  if ('BroadcastChannel' in window) {
-    if (app.bc) app.bc.close();
-    app.bc = new BroadcastChannel(`uno_grid_${roomCode}`);
-    app.bc.onmessage = (ev) => handleIncomingNetMessage(ev.data);
-  }
+  try {
+    if ('BroadcastChannel' in window) {
+      if (app.bc) app.bc.close();
+      app.bc = new BroadcastChannel(`uno_grid_${roomCode}`);
+      app.bc.onmessage = (ev) => handleIncomingNetMessage(ev.data);
+    }
+  } catch (_) {}
 
-  // 2. Cloud Relay HTTPS SSE (ntfy.sh) con recupero ultimi messaggi (fondamentale quando torni da WhatsApp!)
   connectCloudRelay(roomCode);
 
-  // 3. Server-Sent Events locale (solo su localhost)
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     if (app.sse) app.sse.close();
     try {
@@ -323,7 +325,6 @@ function connectCloudRelay(roomCode) {
   }
   try {
     const topic = `${CLOUD_RELAY_PREFIX}${roomCode}`;
-    // since=2m recupera anche i messaggi inviati mentre il giocatore era su WhatsApp!
     const cloudSse = new EventSource(`https://ntfy.sh/${topic}/sse?since=2m`);
     cloudSse.onmessage = (ev) => {
       try {
@@ -377,45 +378,48 @@ function hostOnlineRoom() {
   app.opponentConnected = false;
 
   const p1Name = getPlayerNameInput();
-  // Crea subito il tavolo così entri immediatamente nella sala!
   app.state = createInitialGameState(p1Name, 'In attesa... 📲');
-  app.state.lastActionText = `Stanza ${code} pronta! Invita l'altro giocatore o allenati nell'attesa.`;
+  app.state.lastActionText = `Stanza ${code} pronta! Invita l'amico o allenati nell'attesa.`;
 
+  // 1. Entra SUBITO nella schermata di gioco (prima di qualsiasi operazione di rete)
   setConnectionStatus(false);
-  setupAuxiliaryChannels(code);
-  initHostPeer(code);
-
-  // Entra SUBITO nel tavolo da gioco!
   enterGameScreen();
+
+  // 2. Avvia i canali di rete in sicurezza
+  try {
+    setupAuxiliaryChannels(code);
+    initHostPeer(code);
+  } catch (_) {}
 }
 
 function initHostPeer(code) {
   if (!window.Peer) return;
-  if (app.peer) app.peer.destroy();
+  try {
+    if (app.peer) app.peer.destroy();
+    const peer = new Peer(`${PEER_PREFIX}${code}`, getPeerConfig());
+    app.peer = peer;
 
-  const peer = new Peer(`${PEER_PREFIX}${code}`, getPeerConfig());
-  app.peer = peer;
-
-  peer.on('connection', (conn) => {
-    app.conn = conn;
-    conn.on('data', (data) => handleIncomingNetMessage(data));
-    conn.on('open', () => {
-      setConnectionStatus(true);
-      if (app.state) {
-        broadcastState();
-      }
+    peer.on('connection', (conn) => {
+      app.conn = conn;
+      conn.on('data', (data) => handleIncomingNetMessage(data));
+      conn.on('open', () => {
+        setConnectionStatus(true);
+        if (app.state) {
+          broadcastState();
+        }
+      });
     });
-  });
 
-  peer.on('disconnected', () => {
-    try {
-      peer.reconnect();
-    } catch (_) {}
-  });
+    peer.on('disconnected', () => {
+      try {
+        peer.reconnect();
+      } catch (_) {}
+    });
 
-  peer.on('error', (err) => {
-    console.warn('PeerJS info:', err.type);
-  });
+    peer.on('error', (err) => {
+      console.warn('PeerJS info:', err.type);
+    });
+  } catch (_) {}
 }
 
 function joinOnlineRoom(rawCode) {
@@ -434,18 +438,19 @@ function joinOnlineRoom(rawCode) {
 
   const guestName = getPlayerNameInput();
 
-  // Crea uno stato provvisorio così anche il Giocatore 2 entra SUBITO nella sala!
+  // 1. Entra SUBITO nella schermata di gioco
   app.state = createInitialGameState('Giocatore 1', guestName);
   app.state.lastActionText = `⏳ Connessione alla stanza ${code} in corso...`;
   setConnectionStatus(false);
   enterGameScreen();
 
-  setupAuxiliaryChannels(code);
+  // 2. Avvia canali di rete
+  try {
+    setupAuxiliaryChannels(code);
+    sendNetMessage('GUEST_JOINED', { guestName });
+    pollCloudRelayOnce(code);
+  } catch (_) {}
 
-  // Invia subito la richiesta di ingresso su tutti i canali (incluso Cloud Relay)
-  sendNetMessage('GUEST_JOINED', { guestName });
-
-  // Continua a bussare ogni 2.2s finché l'Host non risponde con lo stato sincronizzato
   if (app.retryInterval) clearInterval(app.retryInterval);
   app.retryInterval = setInterval(() => {
     if (app.opponentConnected) {
@@ -457,26 +462,28 @@ function joinOnlineRoom(rawCode) {
   }, 2200);
 
   if (window.Peer) {
-    if (app.peer) app.peer.destroy();
-    const peer = new Peer(getPeerConfig());
-    app.peer = peer;
+    try {
+      if (app.peer) app.peer.destroy();
+      const peer = new Peer(getPeerConfig());
+      app.peer = peer;
 
-    const attemptConnect = () => {
-      if (app.opponentConnected) return;
-      const conn = peer.connect(`${PEER_PREFIX}${code}`, { reliable: true });
-      app.conn = conn;
+      const attemptConnect = () => {
+        if (app.opponentConnected) return;
+        const conn = peer.connect(`${PEER_PREFIX}${code}`, { reliable: true });
+        app.conn = conn;
 
-      conn.on('open', () => {
-        setConnectionStatus(true);
-        sendNetMessage('GUEST_JOINED', { guestName });
+        conn.on('open', () => {
+          setConnectionStatus(true);
+          sendNetMessage('GUEST_JOINED', { guestName });
+        });
+
+        conn.on('data', (data) => handleIncomingNetMessage(data));
+      };
+
+      peer.on('open', () => {
+        attemptConnect();
       });
-
-      conn.on('data', (data) => handleIncomingNetMessage(data));
-    };
-
-    peer.on('open', () => {
-      attemptConnect();
-    });
+    } catch (_) {}
   }
 }
 
@@ -487,7 +494,6 @@ function joinOnlineRoom(rawCode) {
 function isMyTurnToAct() {
   if (!app.state || app.state.phase === 'GAME_OVER') return false;
   if (app.mode === 'local') return true;
-  // Mentre l'Host è in attesa dell'avversario, può fare pescate di riscaldamento!
   if (app.role === 'host' && !app.opponentConnected) return true;
   if (app.role === 'guest' && !app.opponentConnected) return false;
   return app.state.turn === app.myIndex;
@@ -576,7 +582,6 @@ function executeDrawCard(playerIdx) {
       st.discardPile.push(card);
       st.pendingCard = null;
       st.duplicateSlotNumber = null;
-      // Se siamo in riscaldamento da soli, il turno resta a noi finché non entra l'amico
       if (app.mode === 'online' && app.role === 'host' && !app.opponentConnected) {
         st.turn = 0;
         st.phase = 'DRAWING';
@@ -615,7 +620,6 @@ function executePlaceCard(playerIdx, slotNumber) {
   const filledCount = countFilledSlots(player.board);
   if (filledCount >= 9) {
     if (app.mode === 'online' && app.role === 'host' && !app.opponentConnected) {
-      // Se finisci la tabella durante il riscaldamento, la riazzera per continuare ad allenarti
       player.board = createEmptyBoard();
       st.phase = 'DRAWING';
       st.lastActionText = `🔥 Tabella completata in riscaldamento! In attesa del Giocatore 2...`;
@@ -655,7 +659,8 @@ function scheduleAutoActionsIfNeeded() {
   const st = app.state;
   if (!st) return;
 
-  const autoPlaceChecked = document.getElementById('chk-auto-place').checked;
+  const chk = document.getElementById('chk-auto-place');
+  const autoPlaceChecked = chk ? chk.checked : true;
   if (autoPlaceChecked && st.phase === 'PLACING' && st.pendingCard && isMyTurnToAct()) {
     clearTimeout(app.autoPlaceTimer);
     const num = st.pendingCard.number;
@@ -691,16 +696,17 @@ function renderAll() {
   document.getElementById('p1-score-badge').textContent = `${countFilledSlots(st.players[0].board)}/9`;
   document.getElementById('p2-score-badge').textContent = `${countFilledSlots(st.players[1].board)}/9`;
 
-  // Mostra/nascondi barra invito rapida dentro la sala quando sei in attesa del Giocatore 2
   const inGameInviteBanner = document.getElementById('in-game-invite-banner');
   if (inGameInviteBanner) {
     if (app.mode === 'online' && !app.opponentConnected) {
       inGameInviteBanner.style.display = 'flex';
-      document.getElementById('banner-room-code').textContent = app.roomCode;
-      document.getElementById('banner-wait-msg').textContent =
-        app.role === 'host'
-          ? `Stanza ${app.roomCode} • In attesa dell'amico (puoi allenarti intanto!)`
-          : `Connessione alla stanza ${app.roomCode} in corso...`;
+      const waitMsgEl = document.getElementById('banner-wait-msg');
+      if (waitMsgEl) {
+        waitMsgEl.textContent =
+          app.role === 'host'
+            ? `Stanza ${app.roomCode} • In attesa dell'amico (allenati intanto!)`
+            : `Connessione alla stanza ${app.roomCode} in corso...`;
+      }
     } else {
       inGameInviteBanner.style.display = 'none';
     }
@@ -733,7 +739,7 @@ function renderAll() {
     turnBadge.textContent = st.players[st.turn].name.toUpperCase();
     turnBadge.className = 'turn-indicator-badge';
   } else if (app.mode === 'online' && !app.opponentConnected) {
-    turnBadge.textContent = app.role === 'host' ? 'ATTESA G2' : 'CONNESSIONE';
+    turnBadge.textContent = app.role === 'host' ? 'RISCALDAMENTO' : 'CONNESSIONE';
     turnBadge.className = 'turn-indicator-badge opponent';
   } else if (myTurn) {
     turnBadge.textContent = 'TUO TURNO';
@@ -910,22 +916,27 @@ function copyRoomCode() {
 }
 
 function getPlayerNameInput() {
-  const val = document.getElementById('player-name-input').value.trim();
+  const el = document.getElementById('player-name-input');
+  const val = el ? el.value.trim() : '';
   return val || 'Giocatore 1';
 }
 
 function showLobbyError(msg) {
   const el = document.getElementById('lobby-error');
-  el.textContent = msg;
-  el.style.display = 'block';
+  if (el) {
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
 }
 
 function hideLobbyError() {
-  document.getElementById('lobby-error').style.display = 'none';
+  const el = document.getElementById('lobby-error');
+  if (el) el.style.display = 'none';
 }
 
 function setConnectionStatus(connected) {
   const dot = document.getElementById('conn-dot');
+  if (!dot) return;
   if (connected) {
     dot.classList.remove('waiting');
   } else {
@@ -934,16 +945,23 @@ function setConnectionStatus(connected) {
 }
 
 function enterGameScreen() {
-  document.getElementById('lobby-screen').classList.remove('active');
-  document.getElementById('game-screen').classList.add('active');
-  document.getElementById('btn-leave').style.display = 'inline-flex';
+  const lobbyEl = document.getElementById('lobby-screen');
+  const gameEl = document.getElementById('game-screen');
+  if (lobbyEl) lobbyEl.classList.remove('active');
+  if (gameEl) gameEl.classList.add('active');
+
+  const leaveBtn = document.getElementById('btn-leave');
+  if (leaveBtn) leaveBtn.style.display = 'inline-flex';
 
   const pill = document.getElementById('room-pill');
-  if (app.mode === 'online' && app.roomCode) {
-    pill.style.display = 'inline-flex';
-    document.getElementById('room-code-header').textContent = app.roomCode;
-  } else {
-    pill.style.display = 'none';
+  if (pill) {
+    if (app.mode === 'online' && app.roomCode) {
+      pill.style.display = 'inline-flex';
+      const codeHdr = document.getElementById('room-code-header');
+      if (codeHdr) codeHdr.textContent = app.roomCode;
+    } else {
+      pill.style.display = 'none';
+    }
   }
 
   renderAll();
@@ -969,70 +987,104 @@ window.addEventListener('DOMContentLoaded', () => {
       .catch(() => {});
   }
 
-  document.getElementById('btn-create-room').addEventListener('click', () => {
-    sfx.init();
-    hostOnlineRoom();
-  });
-
-  document.getElementById('btn-join-room').addEventListener('click', () => {
-    sfx.init();
-    const code = document.getElementById('join-code-input').value;
-    joinOnlineRoom(code);
-  });
-
-  document.getElementById('join-code-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+  const btnCreate = document.getElementById('btn-create-room');
+  if (btnCreate) {
+    btnCreate.addEventListener('click', () => {
       sfx.init();
-      joinOnlineRoom(e.target.value);
-    }
-  });
-
-  document.getElementById('btn-local-mode').addEventListener('click', () => {
-    sfx.init();
-    app.mode = 'local';
-    app.role = 'host';
-    app.myIndex = 0;
-    app.opponentConnected = true;
-    const p1 = getPlayerNameInput();
-    app.state = createInitialGameState(p1, 'Giocatore 2');
-    enterGameScreen();
-  });
-
-  document.getElementById('btn-native-share').addEventListener('click', shareInviteMobile);
-  document.getElementById('btn-copy-code').addEventListener('click', copyRoomCode);
-  document.getElementById('btn-copy-link').addEventListener('click', copyInviteLink);
-  document.getElementById('room-pill').addEventListener('click', shareInviteMobile);
-
-  const bannerShareBtn = document.getElementById('btn-banner-share');
-  if (bannerShareBtn) {
-    bannerShareBtn.addEventListener('click', shareInviteMobile);
+      hostOnlineRoom();
+    });
   }
 
-  document.getElementById('uno-deck').addEventListener('click', handleDeckClick);
+  const btnJoin = document.getElementById('btn-join-room');
+  if (btnJoin) {
+    btnJoin.addEventListener('click', () => {
+      sfx.init();
+      const code = document.getElementById('join-code-input').value;
+      joinOnlineRoom(code);
+    });
+  }
 
-  document.getElementById('btn-rematch').addEventListener('click', () => {
-    if (app.mode === 'online' && app.role === 'guest') {
-      sendNetMessage('PLAYER_ACTION', { action: 'REMATCH' });
-    } else {
-      executeRematch();
-    }
-  });
+  const joinInput = document.getElementById('join-code-input');
+  if (joinInput) {
+    joinInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        sfx.init();
+        joinOnlineRoom(e.target.value);
+      }
+    });
+  }
 
-  document.getElementById('btn-rules').addEventListener('click', () => {
-    document.getElementById('rules-modal').classList.add('open');
-  });
-  document.getElementById('btn-close-rules').addEventListener('click', () => {
-    document.getElementById('rules-modal').classList.remove('open');
-  });
+  const btnLocal = document.getElementById('btn-local-mode');
+  if (btnLocal) {
+    btnLocal.addEventListener('click', () => {
+      sfx.init();
+      app.mode = 'local';
+      app.role = 'host';
+      app.myIndex = 0;
+      app.opponentConnected = true;
+      const p1 = getPlayerNameInput();
+      app.state = createInitialGameState(p1, 'Giocatore 2');
+      enterGameScreen();
+    });
+  }
 
-  document.getElementById('btn-sound').addEventListener('click', (e) => {
-    sfx.enabled = !sfx.enabled;
-    e.currentTarget.textContent = sfx.enabled ? '🔊' : '🔇';
-  });
+  const btnNativeShare = document.getElementById('btn-native-share');
+  if (btnNativeShare) btnNativeShare.addEventListener('click', shareInviteMobile);
 
-  document.getElementById('btn-leave').addEventListener('click', () => {
-    window.location.href = window.location.pathname;
-  });
+  const btnCopyCode = document.getElementById('btn-copy-code');
+  if (btnCopyCode) btnCopyCode.addEventListener('click', copyRoomCode);
+
+  const btnCopyLink = document.getElementById('btn-copy-link');
+  if (btnCopyLink) btnCopyLink.addEventListener('click', copyInviteLink);
+
+  const roomPill = document.getElementById('room-pill');
+  if (roomPill) roomPill.addEventListener('click', shareInviteMobile);
+
+  const bannerShareBtn = document.getElementById('btn-banner-share');
+  if (bannerShareBtn) bannerShareBtn.addEventListener('click', shareInviteMobile);
+
+  const unoDeck = document.getElementById('uno-deck');
+  if (unoDeck) unoDeck.addEventListener('click', handleDeckClick);
+
+  const btnRematch = document.getElementById('btn-rematch');
+  if (btnRematch) {
+    btnRematch.addEventListener('click', () => {
+      if (app.mode === 'online' && app.role === 'guest') {
+        sendNetMessage('PLAYER_ACTION', { action: 'REMATCH' });
+      } else {
+        executeRematch();
+      }
+    });
+  }
+
+  const btnRules = document.getElementById('btn-rules');
+  if (btnRules) {
+    btnRules.addEventListener('click', () => {
+      document.getElementById('rules-modal').classList.add('open');
+    });
+  }
+
+  const btnCloseRules = document.getElementById('btn-close-rules');
+  if (btnCloseRules) {
+    btnCloseRules.addEventListener('click', () => {
+      document.getElementById('rules-modal').classList.remove('open');
+    });
+  }
+
+  const btnSound = document.getElementById('btn-sound');
+  if (btnSound) {
+    btnSound.addEventListener('click', (e) => {
+      sfx.enabled = !sfx.enabled;
+      e.currentTarget.textContent = sfx.enabled ? '🔊' : '🔇';
+    });
+  }
+
+  const btnLeave = document.getElementById('btn-leave');
+  if (btnLeave) {
+    btnLeave.addEventListener('click', () => {
+      window.location.href = window.location.pathname;
+    });
+  }
 
   document.querySelectorAll('.emoji-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1042,7 +1094,6 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Quando torni da WhatsApp al browser su mobile, recupera subito gli eventi Cloud e riattiva WebRTC!
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && app.mode === 'online' && app.roomCode) {
       pollCloudRelayOnce(app.roomCode);
@@ -1066,11 +1117,12 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Se il giocatore apre il link di invito ?room=CODICE dallo smartphone, popola il codice
   const params = new URLSearchParams(window.location.search);
   const roomParam = params.get('room');
   if (roomParam) {
-    document.getElementById('join-code-input').value = roomParam.toUpperCase();
-    document.getElementById('player-name-input').value = 'Giocatore 2';
+    const jInput = document.getElementById('join-code-input');
+    const pInput = document.getElementById('player-name-input');
+    if (jInput) jInput.value = roomParam.toUpperCase();
+    if (pInput) pInput.value = 'Giocatore 2';
   }
 });
