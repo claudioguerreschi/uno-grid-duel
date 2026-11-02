@@ -117,6 +117,15 @@
 
   <!-- SCHERMATA DI GIOCO (Layout Verticale 9:16 fedele al Reel su Mobile!) -->
   <main id="game-screen" class="screen">
+    <!-- Banner Invito Rapido in Sala (visibile finché il Giocatore 2 non è entrato) -->
+    <section id="in-game-invite-banner" class="in-game-invite-banner" style="display: none;">
+      <div class="invite-banner-left">
+        <span class="invite-pulse-dot"></span>
+        <span id="banner-wait-msg">Stanza <strong id="banner-room-code">-----</strong> • In attesa dell'amico</span>
+      </div>
+      <button id="btn-banner-share" class="btn-banner-share">📲 Invita Amico</button>
+    </section>
+
     <!-- HUD Turno Compatto -->
     <section id="turn-hud" class="turn-hud">
       <div class="turn-status-main">
